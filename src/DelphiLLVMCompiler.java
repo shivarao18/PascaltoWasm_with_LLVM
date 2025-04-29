@@ -7,6 +7,8 @@ import java.nio.charset.StandardCharsets;
 
 public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
     private StringBuilder code = new StringBuilder();
+    private Deque<String> breakTargets    = new ArrayDeque<>();
+    private Deque<String> continueTargets = new ArrayDeque<>();
     private Map<String, String> variables = new HashMap<>(); // Maps variable names to LLVM types
     private int tempVarCounter = 0;
     private Map<String, String> stringConstants = new HashMap<>();
@@ -308,78 +310,227 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
     
     @Override
     public String visitForStatement(delphiParser.ForStatementContext ctx) {
-        String varName = ctx.identifier().getText();
+        // Loop variable and its LLVM type
+        String varName  = ctx.identifier().getText();
         String llvmType = variables.get(varName);
-        
-        // Generate labels
+
+        // Generate unique labels
         String condLabel = getNextLabel("for.cond");
         String bodyLabel = getNextLabel("for.body");
-        String incLabel = getNextLabel("for.inc");
-        String endLabel = getNextLabel("for.end");
-        
+        String incLabel  = getNextLabel("for.inc");
+        String endLabel  = getNextLabel("for.end");
+
+        // --- Push break/continue targets for nested loops ---
+        breakTargets.push(endLabel);
+        continueTargets.push(incLabel);
+
         // Initialize loop variable
         String initValue = visit(ctx.forList().initialValue().expression());
         emit("  store " + llvmType + " " + initValue + ", " + llvmType + "* %" + varName);
-        
-        // Also update global version
         if (globalVariables.containsKey(varName)) {
-            emit("  store " + llvmType + " " + initValue + ", " + llvmType + "* " + globalVariables.get(varName));
+            emit("  store " + llvmType + " " + initValue + ", " +
+                llvmType + "* " + globalVariables.get(varName));
         }
-        
+
         // Jump to condition check
         emit("  br label %" + condLabel);
-        
-        // Condition check
+
+        // Condition check block
         emit(condLabel + ":");
         String limitValue = visit(ctx.forList().finalValue().expression());
-        String curValue = getNextTemp();
+        String curValue   = getNextTemp();
         emit("  " + curValue + " = load " + llvmType + ", " + llvmType + "* %" + varName);
-        
-        // Compare for the condition
-        String condition = getNextTemp();
-        boolean isToDirection = ctx.forList().TO() != null;
-        if (isToDirection) {
-            // TO: check if variable <= final
+
+        String condition  = getNextTemp();
+        boolean isTo      = ctx.forList().TO() != null;
+        if (isTo) {
             emit("  " + condition + " = icmp sle i32 " + curValue + ", " + limitValue);
         } else {
-            // DOWNTO: check if variable >= final
             emit("  " + condition + " = icmp sge i32 " + curValue + ", " + limitValue);
         }
-        
-        // Branch based on condition
+
         emit("  br i1 " + condition + ", label %" + bodyLabel + ", label %" + endLabel);
-        
-        // Loop body
+
+        // Body block
         emit(bodyLabel + ":");
-        visit(ctx.statement());
-        emit("  br label %" + incLabel);
-        
-        // Increment/decrement
+        visit(ctx.statement());             // generate body
+        emit("  br label %" + incLabel);    // ‘continue’ jumps here
+
+        // Increment block
         emit(incLabel + ":");
         String oldValue = getNextTemp();
         emit("  " + oldValue + " = load " + llvmType + ", " + llvmType + "* %" + varName);
+
         String newValue = getNextTemp();
-        if (isToDirection) {
+        if (isTo) {
             emit("  " + newValue + " = add i32 " + oldValue + ", 1");
         } else {
             emit("  " + newValue + " = sub i32 " + oldValue + ", 1");
         }
+
         emit("  store " + llvmType + " " + newValue + ", " + llvmType + "* %" + varName);
-        
-        // Also update global version
         if (globalVariables.containsKey(varName)) {
-            emit("  store " + llvmType + " " + newValue + ", " + llvmType + "* " + globalVariables.get(varName));
+            emit("  store " + llvmType + " " + newValue + ", " +
+                llvmType + "* " + globalVariables.get(varName));
         }
-        
-        // Jump back to condition
         emit("  br label %" + condLabel);
-        
-        // End of loop
+
+        // Exit block
         emit(endLabel + ":");
-        
+
+        // --- Pop the stacks now that this loop is done ---
+        breakTargets.pop();
+        continueTargets.pop();
+
         return null;
     }
+    // @Override
+    // public String visitForStatement(delphiParser.ForStatementContext ctx) {
+    //     String varName = ctx.identifier().getText();
+    //     String llvmType = variables.get(varName);
+        
+    //     // Generate labels
+    //     String condLabel = getNextLabel("for.cond");
+    //     String bodyLabel = getNextLabel("for.body");
+    //     String incLabel = getNextLabel("for.inc");
+    //     String endLabel = getNextLabel("for.end");
+        
+    //     // Initialize loop variable
+    //     String initValue = visit(ctx.forList().initialValue().expression());
+    //     emit("  store " + llvmType + " " + initValue + ", " + llvmType + "* %" + varName);
+        
+    //     // Also update global version
+    //     if (globalVariables.containsKey(varName)) {
+    //         emit("  store " + llvmType + " " + initValue + ", " + llvmType + "* " + globalVariables.get(varName));
+    //     }
+        
+    //     // Jump to condition check
+    //     emit("  br label %" + condLabel);
+        
+    //     // Condition check
+    //     emit(condLabel + ":");
+    //     String limitValue = visit(ctx.forList().finalValue().expression());
+    //     String curValue = getNextTemp();
+    //     emit("  " + curValue + " = load " + llvmType + ", " + llvmType + "* %" + varName);
+        
+    //     // Compare for the condition
+    //     String condition = getNextTemp();
+    //     boolean isToDirection = ctx.forList().TO() != null;
+    //     if (isToDirection) {
+    //         // TO: check if variable <= final
+    //         emit("  " + condition + " = icmp sle i32 " + curValue + ", " + limitValue);
+    //     } else {
+    //         // DOWNTO: check if variable >= final
+    //         emit("  " + condition + " = icmp sge i32 " + curValue + ", " + limitValue);
+    //     }
+        
+    //     // Branch based on condition
+    //     emit("  br i1 " + condition + ", label %" + bodyLabel + ", label %" + endLabel);
+        
+    //     // Loop body
+    //     emit(bodyLabel + ":");
+    //     visit(ctx.statement());
+    //     emit("  br label %" + incLabel);
+        
+    //     // Increment/decrement
+    //     emit(incLabel + ":");
+    //     String oldValue = getNextTemp();
+    //     emit("  " + oldValue + " = load " + llvmType + ", " + llvmType + "* %" + varName);
+    //     String newValue = getNextTemp();
+    //     if (isToDirection) {
+    //         emit("  " + newValue + " = add i32 " + oldValue + ", 1");
+    //     } else {
+    //         emit("  " + newValue + " = sub i32 " + oldValue + ", 1");
+    //     }
+    //     emit("  store " + llvmType + " " + newValue + ", " + llvmType + "* %" + varName);
+        
+    //     // Also update global version
+    //     if (globalVariables.containsKey(varName)) {
+    //         emit("  store " + llvmType + " " + newValue + ", " + llvmType + "* " + globalVariables.get(varName));
+    //     }
+        
+    //     // Jump back to condition
+    //     emit("  br label %" + condLabel);
+        
+    //     // End of loop
+    //     emit(endLabel + ":");
+        
+    //     return null;
+    // }
     
+    // @Override
+    // public String visitForStatement(delphiParser.ForStatementContext ctx) {
+    //     // … your existing for-loop code up to computing labels …
+    //     String condLabel = getNextLabel("for.cond");
+    //     String incLabel  = getNextLabel("for.inc");
+    //     String endLabel  = getNextLabel("for.end");
+    //     String bodyLabel = getNextLabel("for.body");
+
+    //     breakTargets.push(endLabel);
+    //     continueTargets.push(incLabel);
+
+    //     // initialize, jump to cond, etc.
+    //     // …
+    //     // in the “increment” block you already emit a jump back to condLabel
+    //     // …
+
+    //     emit(endLabel + ":");
+
+    //     breakTargets.pop();
+    //     continueTargets.pop();
+    //     return null;
+    // }
+
+    @Override
+    public String visitWhileStatement(delphiParser.WhileStatementContext ctx) {
+        String condLabel = getNextLabel("while.cond");
+        String bodyLabel = getNextLabel("while.body");
+        String endLabel  = getNextLabel("while.end");
+
+        // 1) record loop labels
+        breakTargets.push(endLabel);
+        continueTargets.push(condLabel);
+
+        // 2) entry jump
+        emit("  br label %" + condLabel);
+
+        // 3) condition check
+        emit(condLabel + ":");
+        String cond = visit(ctx.expression());
+        emit("  br i1 " + cond + ", label %" + bodyLabel + ", label %" + endLabel);
+
+        // 4) body
+        emit(bodyLabel + ":");
+        visit(ctx.statement());
+        // continue → re-test
+        emit("  br label %" + condLabel);
+
+        // 5) loop exit
+        emit(endLabel + ":");
+
+        // 6) pop stacks
+        breakTargets.pop();
+        continueTargets.pop();
+
+        return null;
+    }
+
+    @Override
+    public String visitBreak(delphiParser.BreakContext ctx) {
+        // jump to loop’s end label
+        String target = breakTargets.peek();
+        emit("  br label %" + target);
+        return null;
+    }
+
+    @Override
+    public String visitContinue(delphiParser.ContinueContext ctx) {
+        // jump to loop’s continue label (re-test or increment)
+        String target = continueTargets.peek();
+        emit("  br label %" + target);
+        return null;
+    }
+
     @Override
     public String visitWriteln(delphiParser.WritelnContext ctx) {
         if (ctx.writeArguments() != null) {

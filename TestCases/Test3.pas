@@ -8,11 +8,7 @@ begin
         I := I + 1;
         IF I = 3 THEN
         BEGIN
-            continue;
-        END;
-        IF I = 8 THEN
-        BEGIN
-            break;
+            WRITELN('in if');
         END;
         WRITELN(I);
     end;

@@ -2,8 +2,10 @@ program TestForLoopWithBreakAndContinue;
 var
 	I: Integer;
 begin
-	for I := 1 to 10 do
+	I := 0;
+  while I < 10 do
   begin
+    I := I + 1;
     IF I = 3 THEN
     BEGIN
         continue;

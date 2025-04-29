@@ -1,9 +1,18 @@
-program TestProcedure;
-procedure Greet;
+program TestForLoop;
+var
+	I: Integer;
 begin
-    WRITELN('Hello from procedure!');
-end;
-
-begin
-    Greet;
+	for I := 10 DOWNTO 1 do
+  begin
+    IF I = 3 THEN
+    BEGIN
+        break;
+    END;
+    IF I = 8 THEN
+    BEGIN
+        continue;
+    END;
+    WRITELN(I);
+  end;
 end.
+
