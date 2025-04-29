@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Pascal to WebAssembly Debug</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.6;
+        }
+
+        #output,
+        #console-log {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 20px;
+            background-color: #f5f5f5;
+            min-height: 100px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+
+        #console-log {
+            background-color: #333;
+            color: #0f0;
+        }
+
+        button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Pascal to WebAssembly Debugger</h1>
+
+    <div>
+        <button id="run-test1">Run Test1.wasm</button>
+        <button id="clear-output">Clear Output</button>
+    </div>
+
+    <h2>Program Output:</h2>
+    <div id="output">Waiting for program to run...</div>
+
+    <h2>Console Logs:</h2>
+    <div id="console-log">Console output will appear here...</div>
+
+    <script>
+        // Override console.log to capture in our page
+        const consoleDiv = document.getElementById('console-log');
+        const originalConsoleLog = console.log;
+        const originalConsoleError = console.error;
+
+        console.log = function (...args) {
+            // Call original console.log
+            originalConsoleLog.apply(console, args);
+
+            // Add to our console div
+            const logLine = document.createElement('div');
+            logLine.textContent = args.map(arg =>
+                typeof arg === 'object' ? JSON.stringify(arg) : arg
+            ).join(' ');
+            consoleDiv.appendChild(logLine);
+
+            // Auto-scroll
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        };
+
+        console.error = function (...args) {
+            // Call original console.error
+            originalConsoleError.apply(console, args);
+
+            // Add to our console div in red
+            const logLine = document.createElement('div');
+            logLine.style.color = '#f00';
+            logLine.textContent = 'ERROR: ' + args.map(arg =>
+                typeof arg === 'object' ? JSON.stringify(arg) : arg
+            ).join(' ');
+            consoleDiv.appendChild(logLine);
+
+            // Auto-scroll
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        };
+
+        // Output function
+        const outputDiv = document.getElementById('output');
+        function log(message) {
+            const line = document.createElement('div');
+            line.textContent = message;
+            outputDiv.appendChild(line);
+        }
+
+        // Helper to read string from memory
+        function readString(memory, ptr) {
+            console.log("Reading string from memory at address:", ptr);
+
+            // Check if memory and buffer are valid
+            if (!memory || !memory.buffer) {
+                console.error("Memory or buffer is invalid");
+                return "[Memory error]";
+            }
+
+            // Create byte view of memory
+            const view = new Uint8Array(memory.buffer);
+            let str = '';
+            let bytes = [];
+
+            try {
+                // Read bytes until null terminator
+                let i = ptr;
+                const maxLength = 200; // Safety limit to prevent infinite loops
+                let count = 0;
+
+                while (view[i] !== 0 && count < maxLength) {
+                    str += String.fromCharCode(view[i]);
+                    bytes.push(view[i]);
+                    i++;
+                    count++;
+                }
+
+                console.log("Read bytes:", bytes);
+                console.log("Read string:", str);
+
+                return str;
+            } catch (e) {
+                console.error("Error reading string from memory:", e);
+                return "[Read error]";
+            }
+        }
+
+        // Clear output button
+        document.getElementById('clear-output').addEventListener('click', () => {
+            outputDiv.innerHTML = '';
+            consoleDiv.innerHTML = '';
+        });
+
+        // Run Test1 button
+        document.getElementById('run-test1').addEventListener('click', async () => {
+            outputDiv.innerHTML = '<div>Running Test1.wasm...</div>';
+
+            try {
+                // Fetch and compile the WASM module
+                console.log("Fetching wasm/Test1.wasm...");
+
+                const response = await fetch("wasm/Test1.wasm");
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                console.log("Response received, getting array buffer...");
+                const wasmBytes = await response.arrayBuffer();
+                console.log("WebAssembly bytes received, length:", wasmBytes.byteLength);
+
+                // Memory for storing values between JS and WASM
+                const memory = new WebAssembly.Memory({ initial: 256 });
+                console.log("Memory created:", memory);
+
+                // Simple printf that dumps everything to both console and page
+                const importObject = {
+                    env: {
+                        memory: memory,
+                        printf: function (fmtPtr, ...args) {
+                            console.log("PRINTF CALLED: fmtPtr =", fmtPtr, "args =", args);
+
+                            // Try to read string
+                            const format = readString(memory, fmtPtr);
+                            console.log("Format string:", format);
+
+                            // Always log the raw string
+                            log(`Raw printf: "${format}"`);
+
+                            if (format.includes('%d') && args.length > 0) {
+                                let result = format;
+                                let argIndex = 0;
+
+                                result = result.replace(/%d/g, () => args[argIndex++]);
+                                result = result.replace(/\0/g, '');
+
+                                log(result);
+                            } else {
+                                const cleanStr = format.replace(/\0/g, '');
+                                if (cleanStr.length > 0) {
+                                    log(cleanStr);
+                                }
+                            }
+
+                            return 0;
+                        }
+                    }
+                };
+
+                // Create a module
+                console.log("Instantiating WebAssembly module...");
+                const result = await WebAssembly.instantiate(wasmBytes, importObject);
+                const instance = result.instance;
+                console.log("Module instantiated:", instance);
+
+                // List all exports
+                const exports = Object.keys(instance.exports);
+                console.log("Available exports:", exports);
+
+                // Categorize exports
+                const functions = exports.filter(name => typeof instance.exports[name] === 'function');
+                const globals = exports.filter(name => typeof instance.exports[name] !== 'function');
+
+                log(`Module exports ${exports.length} symbols: ${exports.join(', ')}`);
+                log(`Functions: ${functions.join(', ')}`);
+                log(`Globals: ${globals.join(', ')}`);
+
+                // Execute the main function
+                if (instance.exports.main) {
+                    console.log("Calling main function...");
+                    const result = instance.exports.main();
+                    console.log("Main returned:", result);
+                    log(`Program exited with value: ${result}`);
+
+                    // Show global values
+                    for (const name of globals) {
+                        if (name.startsWith('global_')) {
+                            const varName = name.replace('global_', '');
+                            let value;
+
+                            const globalObj = instance.exports[name];
+                            console.log(`Global ${name}:`, globalObj);
+
+                            if (typeof globalObj === 'object' && 'value' in globalObj) {
+                                value = globalObj.value;
+                            } else if (typeof globalObj === 'number') {
+                                value = globalObj;
+                            } else {
+                                value = `[Unknown format: ${typeof globalObj}]`;
+                            }
+
+                            log(`${varName} = ${value}`);
+                        }
+                    }
+                } else {
+                    log("ERROR: No main function found in the module!");
+                }
+
+            } catch (error) {
+                console.error("Failed to load WASM module:", error);
+                log(`Error: ${error.message}`);
+            }
+        });
+
+        console.log("Debug page initialized. Click 'Run Test1.wasm' to start.");
+    </script>
+</body>
+
+</html>

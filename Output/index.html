@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>...</html><!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Pascal to WebAssembly Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.6;
+        }
+        #output {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 20px;
+            background-color: #f5f5f5;
+            min-height: 100px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        select {
+            padding: 8px;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Pascal to WebAssembly Demo</h1>
+    
+    <div>
+        <select id="program-select">
+            <!-- This will be filled dynamically with available .wasm files -->
+        </select>
+        <button id="run-button">Run Program</button>
+    </div>
+    
+    <div id="output">
+        <p>Program output will appear here...</p>
+    </div>
+    
+    <script src="wasm-loader.js"></script>
+</body>
+</html>
