@@ -13,4 +13,5 @@ begin
   Obj := MyClass.Create;
   Obj.X := 10;
   WRITELN(Obj.X);
+  WRITELN('class end');
 end.

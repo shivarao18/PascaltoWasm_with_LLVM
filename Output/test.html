@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebAssembly Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        #output {
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            min-height: 200px;
+            white-space: pre-wrap;
+            margin-top: 20px;
+        }
+
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px 2px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>WebAssembly Test</h1>
+    <div>
+        <select id="program-select"></select>
+        <button id="run-button">Run Program</button>
+    </div>
+    <div id="output"></div>
+
+    <script>
+        // Keep track of loaded WASM modules
+        let loadedModules = {};
+        const outputElement = document.getElementById('output');
+        const programSelect = document.getElementById('program-select');
+        const runButton = document.getElementById('run-button');
+
+        // Function to log output
+        function log(message) {
+            outputElement.innerHTML += `<div>${message}</div>`;
+            console.log(message);
+        }
+
+        // Clear output
+        function clearOutput() {
+            outputElement.innerHTML = '';
+        }
+
+        // Helper to read string from memory
+        function readString(memory, ptr) {
+            // Convert BigInt to Number if needed
+            const ptrNum = typeof ptr === 'bigint' ? Number(ptr) : ptr;
+            console.log("Reading string from memory at address:", ptrNum);
+            const view = new Uint8Array(memory.buffer);
+            let str = '';
+
+            try {
+                // Read bytes until null terminator
+                let i = ptrNum;
+                const maxLength = 200; // Safety limit
+                let count = 0;
+
+                while (view[i] !== 0 && count < maxLength) {
+                    str += String.fromCharCode(view[i]);
+                    i++;
+                    count++;
+                }
+
+                return str;
+            } catch (e) {
+                console.error("Error reading string from memory:", e);
+                return "[Read error]";
+            }
+        }
+
+        // Function to load and instantiate a WASM module
+        async function loadWasmModule(moduleName) {
+            if (loadedModules[moduleName]) {
+                return loadedModules[moduleName];
+            }
+
+            try {
+                log(`Fetching wasm/${moduleName}...`);
+                const response = await fetch(`wasm/${moduleName}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const bytes = await response.arrayBuffer();
+                log("Compiling WebAssembly module...");
+
+                // Memory for Wasm
+                const memory = new WebAssembly.Memory({ initial: 256 });
+
+                // Basic memory management for malloc/free
+                let memoryBase = 1024; // Start after potential static allocations
+                const allocations = new Map();
+
+                function malloc(size) {
+                    // Ensure size is a regular number, not BigInt
+                    const sizeNum = typeof size === 'bigint' ? Number(size) : size;
+                    const ptr = memoryBase;
+                    memoryBase += sizeNum;
+                    allocations.set(ptr, sizeNum);
+                    console.log(`Malloc: ${sizeNum} bytes at address ${ptr}`);
+                    return ptr;
+                }
+
+                function free(ptr) {
+                    // Ensure ptr is a regular number, not BigInt
+                    const ptrNum = typeof ptr === 'bigint' ? Number(ptr) : ptr;
+                    if (allocations.has(ptrNum)) {
+                        console.log(`Free: releasing memory at address ${ptrNum}`);
+                        allocations.delete(ptrNum);
+                    } else {
+                        console.warn(`Free: attempted to free unallocated memory at ${ptrNum}`);
+                    }
+                }
+
+                // Import object with all required functions
+                const importObject = {
+                    env: {
+                        memory: memory,
+                        js_print_str: function (ptr) {
+                            const s = readString(memory, ptr);
+                            log(s);
+                        },
+                        js_print_i32: function (val) {
+                            log(val.toString());
+                        },
+                        malloc: malloc,
+                        free: free,
+                        js_read_i32: function () {
+                            // Simple implementation - returns 0
+                            log("Input requested (returning 0)");
+                            return 0;
+                        },
+                        string_length: function (ptr) {
+                            const str = readString(memory, ptr);
+                            return str.length;
+                        }
+                    }
+                };
+
+                const { instance } = await WebAssembly.instantiate(bytes, importObject);
+                loadedModules[moduleName] = instance;
+                log("WebAssembly module loaded successfully");
+                return instance;
+            } catch (error) {
+                console.error("Failed to load WASM module:", error);
+                log(`Error: ${error.message}`);
+                return null;
+            }
+        }
+
+        // Run the selected program
+        async function runProgram() {
+            const selectedModule = programSelect.value;
+            if (!selectedModule) {
+                log("Please select a program to run");
+                return;
+            }
+
+            clearOutput();
+            log(`Running ${selectedModule}...`);
+
+            const moduleInstance = await loadWasmModule(selectedModule);
+            if (moduleInstance) {
+                // Find the main function
+                const mainFunction = moduleInstance.exports.main;
+
+                if (mainFunction) {
+                    try {
+                        // Run the program
+                        const result = mainFunction();
+                        // Convert BigInt to Number if needed for display
+                        const displayResult = typeof result === 'bigint' ? Number(result) : result;
+                        log(`Program executed. Return value: ${displayResult}`);
+                    } catch (error) {
+                        log(`Error running program: ${error.message}`);
+                        console.error("Runtime error:", error);
+                    }
+                } else {
+                    log("Error: Could not find main function in the module");
+                }
+            }
+        }
+
+        // Initialize the module selector
+        async function initModuleSelector() {
+            // Test for specific modules we expect
+            const modules = ["Test12.wasm", "Test1.wasm"];
+
+            // Clear existing options
+            programSelect.innerHTML = '';
+
+            // Add options for each module
+            modules.forEach(module => {
+                const option = document.createElement('option');
+                option.value = module;
+                option.textContent = module.replace('.wasm', '');
+                programSelect.appendChild(option);
+            });
+
+            // Default to Test12.wasm
+            programSelect.value = "Test12.wasm";
+        }
+
+        // Event listener for run button
+        runButton.addEventListener('click', runProgram);
+
+        // Initialize when page loads
+        window.addEventListener('load', initModuleSelector);
+    </script>
+</body>
+
+</html>

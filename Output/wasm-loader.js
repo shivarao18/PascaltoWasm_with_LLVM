@@ -50,7 +50,7 @@ async function checkKnownFiles() {
     const possibleFiles = [];
 
     // Test# pattern
-    for (let i = 1; i <= 10; i++) {
+    for (let i = 1; i <= 20; i++) {
         possibleFiles.push(`Test${i}.wasm`);
     }
 
@@ -144,7 +144,9 @@ async function loadAvailableModules() {
 
 // Helper to read string from memory
 function readString(memory, ptr) {
-    console.log("Reading string from memory at address:", ptr);
+    // Convert BigInt to Number if needed
+    const ptrNum = typeof ptr === 'bigint' ? Number(ptr) : ptr;
+    console.log("Reading string from memory at address:", ptrNum);
 
     // Check if memory and buffer are valid
     if (!memory || !memory.buffer) {
@@ -159,7 +161,7 @@ function readString(memory, ptr) {
 
     try {
         // Read bytes until null terminator
-        let i = ptr;
+        let i = ptrNum;
         const maxLength = 200; // Safety limit to prevent infinite loops
         let count = 0;
 
@@ -196,6 +198,33 @@ async function loadWasmModule(moduleName) {
         // Memory for Wasm
         const memory = new WebAssembly.Memory({ initial: 256 });
 
+        // Basic memory management for malloc/free
+        let memoryBase = 1024; // Start after potential static allocations
+        const allocations = new Map();
+
+        function malloc(size) {
+            // Convert BigInt to Number if needed
+            const sizeNum = typeof size === 'bigint' ? Number(size) : size;
+            const ptr = memoryBase;
+            memoryBase += sizeNum;
+            allocations.set(ptr, sizeNum);
+            console.log(`Malloc: ${sizeNum} bytes at address ${ptr}`);
+            return ptr;
+        }
+
+        function free(ptr) {
+            // Convert BigInt to Number if needed
+            const ptrNum = typeof ptr === 'bigint' ? Number(ptr) : ptr;
+            if (allocations.has(ptrNum)) {
+                console.log(`Free: releasing memory at address ${ptrNum}`);
+                allocations.delete(ptrNum);
+                // In this simple implementation, we don't actually reclaim memory
+                // A real implementation would manage a free list
+            } else {
+                console.warn(`Free: attempted to free unallocated memory at ${ptrNum}`);
+            }
+        }
+
         // Import object with js_print_str and js_print_i32
         const importObject = {
             env: {
@@ -206,6 +235,18 @@ async function loadWasmModule(moduleName) {
                 },
                 js_print_i32: function (val) {
                     log(val.toString());
+                },
+                malloc: malloc,
+                free: free,
+                js_read_i32: function () {
+                    // Simple implementation - returns 0 for now
+                    // Ideally would prompt the user for input
+                    log("Input requested (returning 0)");
+                    return 0;
+                },
+                string_length: function (ptr) {
+                    const str = readString(memory, ptr);
+                    return str.length;
                 }
             }
         };
@@ -246,7 +287,9 @@ async function runProgram() {
                 const result = mainFunction();
                 const endTime = performance.now();
 
-                log(`Program executed in ${(endTime - startTime).toFixed(2)}ms. Return value: ${result}`);
+                // Convert BigInt to Number if needed for display
+                const displayResult = typeof result === 'bigint' ? Number(result) : result;
+                log(`Program executed in ${(endTime - startTime).toFixed(2)}ms. Return value: ${displayResult}`);
 
                 // Display any global values (variables exported from the program)
                 const globals = Object.keys(moduleInstance.exports)
@@ -266,8 +309,9 @@ async function runProgram() {
                         let value;
                         if (typeof globalObj === 'object' && 'value' in globalObj) {
                             value = globalObj.value;
-                        } else if (typeof globalObj === 'number') {
-                            value = globalObj;
+                        } else if (typeof globalObj === 'number' || typeof globalObj === 'bigint') {
+                            // Convert BigInt to Number if needed
+                            value = typeof globalObj === 'bigint' ? Number(globalObj) : globalObj;
                         } else {
                             value = "[Unknown format]";
                         }

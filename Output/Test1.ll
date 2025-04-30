@@ -8,6 +8,8 @@ target triple = "wasm32-unknown-unknown"
 
 declare void @js_print_str(i8*)
 declare void @js_print_i32(i32)
+declare i32 @string_length(i8*)
+declare i32 @js_read_i32()
 
 define i32 @main() {
 entry:
