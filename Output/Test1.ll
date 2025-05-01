@@ -1,6 +1,9 @@
 ; ModuleID = 'delphi_program'
 target triple = "wasm32-unknown-unknown"
 
+declare i8* @malloc(i64)
+declare void @free(i8*)
+
 @.str.2 = private constant [11 x i8] c"Global e: \00"
 @.str.0 = private constant [11 x i8] c"Global c: \00"
 @.str.1 = private constant [11 x i8] c"Global d: \00"
@@ -10,6 +13,7 @@ declare void @js_print_str(i8*)
 declare void @js_print_i32(i32)
 declare i32 @string_length(i8*)
 declare i32 @js_read_i32()
+
 
 define i32 @main() {
 entry:

@@ -144,9 +144,7 @@ async function loadAvailableModules() {
 
 // Helper to read string from memory
 function readString(memory, ptr) {
-    // Convert BigInt to Number if needed
-    const ptrNum = typeof ptr === 'bigint' ? Number(ptr) : ptr;
-    console.log("Reading string from memory at address:", ptrNum);
+    console.log("Reading string from memory at address:", ptr);
 
     // Check if memory and buffer are valid
     if (!memory || !memory.buffer) {
@@ -161,7 +159,7 @@ function readString(memory, ptr) {
 
     try {
         // Read bytes until null terminator
-        let i = ptrNum;
+        let i = ptr;
         const maxLength = 200; // Safety limit to prevent infinite loops
         let count = 0;
 
@@ -198,55 +196,80 @@ async function loadWasmModule(moduleName) {
         // Memory for Wasm
         const memory = new WebAssembly.Memory({ initial: 256 });
 
-        // Basic memory management for malloc/free
-        let memoryBase = 1024; // Start after potential static allocations
-        const allocations = new Map();
+        // Simple memory management system
+        const HEAP_BASE = 65536; // Start of our heap (after stack)
+        let currentHeapPtr = HEAP_BASE;
 
-        function malloc(size) {
-            // Convert BigInt to Number if needed
-            const sizeNum = typeof size === 'bigint' ? Number(size) : size;
-            const ptr = memoryBase;
-            memoryBase += sizeNum;
-            allocations.set(ptr, sizeNum);
-            console.log(`Malloc: ${sizeNum} bytes at address ${ptr}`);
-            return ptr;
-        }
-
-        function free(ptr) {
-            // Convert BigInt to Number if needed
-            const ptrNum = typeof ptr === 'bigint' ? Number(ptr) : ptr;
-            if (allocations.has(ptrNum)) {
-                console.log(`Free: releasing memory at address ${ptrNum}`);
-                allocations.delete(ptrNum);
-                // In this simple implementation, we don't actually reclaim memory
-                // A real implementation would manage a free list
-            } else {
-                console.warn(`Free: attempted to free unallocated memory at ${ptrNum}`);
-            }
-        }
-
-        // Import object with js_print_str and js_print_i32
+        // Import object with js_print_str, js_print_i32, malloc, and free
         const importObject = {
             env: {
                 memory: memory,
+
+                // Print functions
                 js_print_str: function (ptr) {
+                    // Convert BigInt to Number if needed
+                    if (typeof ptr === 'bigint') {
+                        ptr = Number(ptr);
+                    }
                     const s = readString(memory, ptr);
                     log(s);
                 },
                 js_print_i32: function (val) {
-                    log(val.toString());
+                    // Handle BigInt values
+                    if (typeof val === 'bigint') {
+                        log(val.toString());
+                    } else {
+                        log(val.toString());
+                    }
                 },
-                malloc: malloc,
-                free: free,
+
+                // Basic malloc implementation
+                malloc: function (size) {
+                    // Convert BigInt to Number if needed
+                    if (typeof size === 'bigint') {
+                        size = Number(size);
+                    }
+
+                    // Align to 8 bytes
+                    size = Math.ceil(size / 8) * 8;
+
+                    // Allocate memory
+                    const ptr = currentHeapPtr;
+                    currentHeapPtr += size;
+
+                    // Check if we're running out of memory
+                    const memoryPages = memory.buffer.byteLength / 65536;
+                    if (currentHeapPtr >= memoryPages * 65536 - 65536) {
+                        // We're close to running out - grow memory
+                        memory.grow(1); // Add one page (64KB)
+                    }
+
+                    console.log(`malloc(${size}) = ${ptr}`);
+                    return ptr;
+                },
+
+                // Basic free implementation (does nothing in this simple model)
+                free: function (ptr) {
+                    // Convert BigInt to Number if needed
+                    if (typeof ptr === 'bigint') {
+                        ptr = Number(ptr);
+                    }
+
+                    // In a real implementation, we would track allocations and free them
+                    // But for this demo, we'll just log it
+                    console.log(`free(${ptr})`);
+                },
+
+                // Implementation for read_i32 (readln)
                 js_read_i32: function () {
-                    // Simple implementation - returns 0 for now
-                    // Ideally would prompt the user for input
-                    log("Input requested (returning 0)");
-                    return 0;
-                },
-                string_length: function (ptr) {
-                    const str = readString(memory, ptr);
-                    return str.length;
+                    // In a real application, you'd prompt the user
+                    // For simplicity, we'll just return a default value
+                    const defaultValue = 42;
+                    log(`[Input] Simulated user input: ${defaultValue}`);
+                    return defaultValue;
+
+                    // Alternatively, for real input, you could use:
+                    // return parseInt(prompt("Enter a number:") || "0");
                 }
             }
         };
@@ -287,9 +310,15 @@ async function runProgram() {
                 const result = mainFunction();
                 const endTime = performance.now();
 
-                // Convert BigInt to Number if needed for display
-                const displayResult = typeof result === 'bigint' ? Number(result) : result;
-                log(`Program executed in ${(endTime - startTime).toFixed(2)}ms. Return value: ${displayResult}`);
+                // Convert BigInt result to Number if necessary
+                let resultStr;
+                if (typeof result === 'bigint') {
+                    resultStr = result.toString();
+                } else {
+                    resultStr = result.toString();
+                }
+
+                log(`Program executed in ${(endTime - startTime).toFixed(2)}ms. Return value: ${resultStr}`);
 
                 // Display any global values (variables exported from the program)
                 const globals = Object.keys(moduleInstance.exports)
@@ -309,9 +338,10 @@ async function runProgram() {
                         let value;
                         if (typeof globalObj === 'object' && 'value' in globalObj) {
                             value = globalObj.value;
-                        } else if (typeof globalObj === 'number' || typeof globalObj === 'bigint') {
-                            // Convert BigInt to Number if needed
-                            value = typeof globalObj === 'bigint' ? Number(globalObj) : globalObj;
+                        } else if (typeof globalObj === 'number') {
+                            value = globalObj;
+                        } else if (typeof globalObj === 'bigint') {
+                            value = globalObj.toString();
                         } else {
                             value = "[Unknown format]";
                         }

@@ -200,12 +200,12 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
                 }
             }
         } 
-        // Also check for string literals in other contexts
         else if (tree instanceof delphiParser.UnsignedConstantContext) {
             delphiParser.UnsignedConstantContext ctx = (delphiParser.UnsignedConstantContext) tree;
-            if (ctx.STRING_LITERAL() != null) {
-                String s = ctx.STRING_LITERAL().getText();
-                s = s.substring(1, s.length()-1).replace("''", "'");
+            String text = ctx.getText();
+            // Delphi string literals start and end with single quotes
+            if (text.length() >= 2 && text.startsWith("'") && text.endsWith("'")) {
+                String s = text.substring(1, text.length() - 1).replace("''", "'");
                 registerStringConstant(s);
             }
         }
@@ -702,16 +702,57 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
                     // JS import for strings
                     emit("  call void @js_print_str(i8* " + ptr + ")");
                 } else if (arg.writeExpr() != null) {
-                    String varName = arg.writeExpr().IDENT(0).getText();
-                    String llvmType = variables.get(varName);
-                    if (llvmType.equals("i32")) {
-                        String varPtr = "%" + varName;
-                        // load from alloca
-                        String tmp = getNextTemp();
-                        emit("  " + tmp + " = load i32, i32* " + varPtr);
-                        // JS print
-                        emit("  call void @js_print_i32(i32 " + tmp + ")");
+                    // Handle the special case for field access: Obj.X
+                    String expr = arg.writeExpr().getText();
+                    String resultVar;
+                    
+                    if (expr.contains(".")) {
+                        String[] parts = expr.split("\\.", 2);
+                        String objName = parts[0];
+                        String fieldName = parts[1];
+                        
+                        if (variables.containsKey(objName)) {
+                            String objType = variables.get(objName);
+                            
+                            // Extract the class name from the type
+                            if (objType.endsWith("*") && objType.contains(".struct")) {
+                                String className = objType.substring(1, objType.indexOf(".struct"));
+                                
+                                if (classDefs.containsKey(className)) {
+                                    ClassDef classDef = classDefs.get(className);
+                                    
+                                    if (classDef.fields.containsKey(fieldName)) {
+                                        String fieldType = classDef.fields.get(fieldName);
+                                        int fieldOffset = classDef.fieldOffsets.get(fieldName);
+                                        
+                                        // Load the object pointer
+                                        String objPtr = getNextTemp();
+                                        emit("  " + objPtr + " = load " + objType + ", " + objType + "* %" + objName);
+                                        
+                                        // Get pointer to field
+                                        String fieldPtr = getNextTemp();
+                                        emit("  " + fieldPtr + " = getelementptr " + classDef.structType + ", " + 
+                                            classDef.structType + "* " + objPtr + ", i32 0, i32 " + fieldOffset);
+                                        
+                                        // Load field value
+                                        resultVar = getNextTemp();
+                                        emit("  " + resultVar + " = load " + fieldType + ", " + fieldType + "* " + fieldPtr);
+                                        
+                                        // Print the result
+                                        emit("  call void @js_print_i32(i32 " + resultVar + ")");
+                                        continue; // Skip to next arg
+                                    }
+                                }
+                            }
+                        }
                     }
+                    
+                    // For simple variables or if field access parsing failed
+                    String exprResult = visit(arg.writeExpr());
+                    if (exprResult == null || exprResult.equals("null")) {
+                        exprResult = "0"; // fallback to 0 if unresolved
+                    }
+                    emit("  call void @js_print_i32(i32 " + exprResult + ")");
                 }
             }
         }
@@ -1603,6 +1644,61 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
         emit("  ret " + classDef.structType + "* " + typedObjPtr);
         emit("}");
         emit("");
+    }
+    
+    @Override
+    public String visitWriteExpr(delphiParser.WriteExprContext ctx) {
+        String expr = ctx.getText();
+        
+        // Handle field access like Obj.X
+        if (expr.contains(".")) {
+            String[] parts = expr.split("\\.", 2);
+            String objName = parts[0];
+            String fieldName = parts[1];
+            
+            if (variables.containsKey(objName)) {
+                String objType = variables.get(objName);
+                
+                // Extract the class name from the type
+                if (objType.endsWith("*") && objType.contains(".struct")) {
+                    String className = objType.substring(1, objType.indexOf(".struct"));
+                    
+                    if (classDefs.containsKey(className)) {
+                        ClassDef classDef = classDefs.get(className);
+                        
+                        if (classDef.fields.containsKey(fieldName)) {
+                            String fieldType = classDef.fields.get(fieldName);
+                            int fieldOffset = classDef.fieldOffsets.get(fieldName);
+                            
+                            // Load the object pointer
+                            String objPtr = getNextTemp();
+                            emit("  " + objPtr + " = load " + objType + ", " + objType + "* %" + objName);
+                            
+                            // Get pointer to field
+                            String fieldPtr = getNextTemp();
+                            emit("  " + fieldPtr + " = getelementptr " + classDef.structType + ", " + 
+                                 classDef.structType + "* " + objPtr + ", i32 0, i32 " + fieldOffset);
+                            
+                            // Load field value
+                            String resultVar = getNextTemp();
+                            emit("  " + resultVar + " = load " + fieldType + ", " + fieldType + "* " + fieldPtr);
+                            
+                            return resultVar;
+                        }
+                    }
+                }
+            }
+            // If we reach here, we couldn't resolve the field access
+            return "0"; // fallback
+        }
+        
+        // For simple variables
+        if (variables.containsKey(expr)) {
+            return loadVariable(expr);
+        }
+        
+        // Default (shouldn't reach here for valid expressions)
+        return "0";
     }
     
     public static void main(String[] args) throws IOException {

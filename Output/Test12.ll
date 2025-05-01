@@ -12,7 +12,6 @@ declare void @js_print_i32(i32)
 declare i32 @string_length(i8*)
 declare i32 @js_read_i32()
 
-@.str.0 = private constant [10 x i8] c"class end\00"
 %MyClass.struct = type { i32 }
 
 define %MyClass.struct* @MyClass_Create() {
@@ -33,12 +32,16 @@ entry:
   %t4 = load %MyClass.struct*, %MyClass.struct** %Obj
   %t5 = getelementptr %MyClass.struct, %MyClass.struct* %t4, i32 0, i32 0
   store i32 10, i32* %t5
-  %t6 = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
-  call void @js_print_str(i8* %t6)
-  %t7 = getelementptr [10 x i8], [10 x i8]* @.str.0, i32 0, i32 0
-  call void @js_print_str(i8* %t7)
-  %t8 = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
-  call void @js_print_str(i8* %t8)
+  %t6 = load %MyClass.struct*, %MyClass.struct** %Obj
+  %t7 = getelementptr %MyClass.struct, %MyClass.struct* %t6, i32 0, i32 0
+  %t8 = load i32, i32* %t7
+  call void @js_print_i32(i32 %t8)
+  %t9 = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+  call void @js_print_str(i8* %t9)
+  %t10 = getelementptr [10 x i8], [10 x i8]* @.str.0, i32 0, i32 0
+  call void @js_print_str(i8* %t10)
+  %t11 = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+  call void @js_print_str(i8* %t11)
   ret i32 0
 }
 
