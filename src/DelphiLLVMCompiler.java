@@ -150,6 +150,15 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
         }
         emit("");
         
+        // Process constructor and destructor definitions before generating method stubs
+        for (int i = 0; i < ctx.block().getChildCount(); i++) {
+            ParseTree child = ctx.block().getChild(i);
+            if (child instanceof delphiParser.ConstructorDefinitionPartContext ||
+                child instanceof delphiParser.DestructorDefinitionPartContext) {
+                visit(child);
+            }
+        }
+        
         // Process method definitions after class definitions
         generateMethodDefinitions();
         
@@ -172,7 +181,9 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
         for (int i = 0; i < ctx.block().getChildCount(); i++) {
             ParseTree child = ctx.block().getChild(i);
             if (!(child instanceof delphiParser.ProcedureAndFunctionDeclarationPartContext ||
-                  child instanceof delphiParser.TypeDefinitionPartContext)) {
+                  child instanceof delphiParser.TypeDefinitionPartContext ||
+                  child instanceof delphiParser.ConstructorDefinitionPartContext ||
+                  child instanceof delphiParser.DestructorDefinitionPartContext)) {
                 visit(child);
             }
         }
@@ -345,7 +356,7 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
         String varText = ctx.variable().getText();
         String exprResult = visit(ctx.expression());
         
-        // Check if this is a field assignment: obj.field := value
+        // Check if this is a field assignment: obj.field := value or a direct field assignment in a constructor/destructor
         if (varText.contains(".")) {
             String[] parts = varText.split("\\.", 2);
             String objName = parts[0];
@@ -384,6 +395,22 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
             }
             
             return null;
+        } 
+        // Direct field access in constructor or destructor context
+        else if (currentClassName != null && classDefs.containsKey(currentClassName)) {
+            ClassDef classDef = classDefs.get(currentClassName);
+            
+            if (classDef.fields.containsKey(varText)) {
+                // We're in a constructor or destructor and assigning directly to a field
+                if (parameterMap.containsKey(varText)) {
+                    String fieldPtr = parameterMap.get(varText);
+                    String fieldType = classDef.fields.get(varText);
+                    
+                    // Store value to field
+                    emit("  store " + fieldType + " " + exprResult + ", " + fieldType + "* " + fieldPtr);
+                    return null;
+                }
+            }
         }
         
         // Handle regular variable assignment
@@ -1373,6 +1400,10 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
                 // This is a pointer to another class - initialize to null
                 emit("  store " + fieldType + "* null, " + fieldType + "** " + fieldPtr);
             }
+            
+            // Store the field pointers in variables map so they can be accessed in the constructor body
+            variables.put(fieldName, fieldType);
+            parameterMap.put(fieldName, fieldPtr);
         }
         
         // Create a 'this' variable to represent the object itself
@@ -1381,10 +1412,17 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
         emit("  " + thisVar + " = alloca " + classDef.structType + "*");
         emit("  store " + classDef.structType + "* " + typedObjPtr + ", " + classDef.structType + "** " + thisVar);
         
+        // Store the current class name for field access resolution
+        String prevClassName = currentClassName;
+        currentClassName = className;
+        
         // Visit constructor body code
         if (ctx.block() != null) {
             visit(ctx.block());
         }
+        
+        // Restore previous class name
+        currentClassName = prevClassName;
         
         // Return the object pointer
         emit("  ret " + classDef.structType + "* " + typedObjPtr);
@@ -1690,6 +1728,24 @@ public class DelphiLLVMCompiler extends delphiBaseVisitor<String> {
             }
             // If we reach here, we couldn't resolve the field access
             return "0"; // fallback
+        }
+        
+        // Direct field access in constructor/destructor context
+        else if (currentClassName != null && classDefs.containsKey(currentClassName)) {
+            ClassDef classDef = classDefs.get(currentClassName);
+            
+            if (classDef.fields.containsKey(expr)) {
+                // We're in a constructor or destructor and accessing a field directly
+                if (parameterMap.containsKey(expr)) {
+                    String fieldPtr = parameterMap.get(expr);
+                    String fieldType = classDef.fields.get(expr);
+                    
+                    // Load field value
+                    String resultVar = getNextTemp();
+                    emit("  " + resultVar + " = load " + fieldType + ", " + fieldType + "* " + fieldPtr);
+                    return resultVar;
+                }
+            }
         }
         
         // For simple variables
